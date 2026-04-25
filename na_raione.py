@@ -2,10 +2,16 @@
 
 import telebot
 from telebot import types
-import json, os, random, threading, time, math
+import json
+import os
+import random
+import threading
+import time
+import math
 
 TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "players.json"
+
 WORK_DURATION = 3600       # 1 час — задание
 PENALTY_SHORT = 1800       # 30 мин — штраф за проигрыш
 PENALTY_LONG = 3600        # 1 час — штраф за «особый исход»
@@ -240,18 +246,49 @@ BANDIT_RANKS = [
     (4000, "Смотрящий за городом", 9),
     (7000, "Крёстный отец",        10),
 ]
-# na_raione.py — Часть 2
 
 # ===================== РАБОТА С ДАННЫМИ =====================
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+            try:
+                data = json.load(f)
+                if "groups" not in data:
+                    return {"groups": {}}
+                return data
+            except json.JSONDecodeError:
+                return {"groups": {}}
+    return {"groups": {}}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+def ensure_group(data, chat_id):
+    chat_id = str(chat_id)
+    if "groups" not in data:
+        data["groups"] = {}
+    if chat_id not in data["groups"]:
+        data["groups"][chat_id] = {"players": {}}
+        save_data(data)
+
+def get_player(data, chat_id, user_id):
+    chat_id = str(chat_id)
+    user_id = str(user_id)
+    ensure_group(data, chat_id)
+    return data["groups"][chat_id]["players"].get(user_id)
+
+def set_player(data, chat_id, user_id, player_data):
+    chat_id = str(chat_id)
+    user_id = str(user_id)
+    ensure_group(data, chat_id)
+    data["groups"][chat_id]["players"][user_id] = player_data
+    save_data(data)
+
+def get_all_players_in_group(data, chat_id):
+    chat_id = str(chat_id)
+    ensure_group(data, chat_id)
+    return data["groups"][chat_id]["players"]
 
 def get_rank_info(side, exp):
     """Возвращает (название звания, rank_bonus)"""
@@ -301,10 +338,8 @@ def pick_event_by_rank(side, exp):
 def is_on_cooldown(player):
     """Проверяет, находится ли игрок на кулдауне (задержан/ранен/на задании)"""
     now = time.time()
-    # На задании
     if player.get("working_until", 0) > now:
         return True, player["working_until"] - now, "задании"
-    # Штрафной кулдаун
     if player.get("penalty_until", 0) > now:
         return True, player["penalty_until"] - now, "штрафе"
     return False, 0, ""
@@ -321,60 +356,72 @@ def add_exp(player, amount):
     """Безопасное изменение опыта — никогда не уходит ниже 0"""
     player["exp"] = max(0, player["exp"] + amount)
 
-# na_raione.py — Часть 3 (ПОЛНАЯ ЗАМЕНА)
-
+# ===================== ЛОГИКА ИГРЫ =====================
 FIGHT_DELAY = 10  # сек — окно ожидания других игроков перед стычкой
 
-# Флаги запланированных стычек по району (чтобы не дублировать)
-scheduled_fights = {}   # {district: True}
+scheduled_fights = {}   # {fight_key: True}
 fight_lock = threading.Lock()
 
-
 # ===================== /start =====================
-
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
-    # Если пишут в личку — отправляем на группу
     if message.chat.type == "private":
-        bot.send_message(message.chat.id,
-                         "❌ Эта игра работает только в группе!\n"
-                         "👉 Перейди сюда: https://t.me/+GRs5jc8dQuZkZGVi"
-                         )
+        bot.send_message(
+            message.chat.id,
+            "❌ Эта игра работает только в группе!\n"
+            "👉 Перейди сюда: https://t.me/+GRs5jc8dQuZkZGVi"
+        )
         return
+
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
 
     with data_lock:
         data = load_data()
-        pid = str(message.from_user.id)
-        if pid in data:
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+
+        if player:
             bot.reply_to(message, "Ты уже в игре! Напиши «работать» или «профиль».")
             return
 
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("👮 Полицейский", callback_data="side_cop"))
     kb.add(types.InlineKeyboardButton("🔫 Бандит", callback_data="side_bandit"))
-    bot.send_message(message.chat.id,
-                     "🏙 <b>«На районе»</b>\n\n"
-                     "Добро пожаловать в криминальный мир города!\n"
-                     "Выбери свою сторону:",
-                     reply_markup=kb, parse_mode="HTML")
 
+    bot.send_message(
+        message.chat.id,
+        "🏙 <b>«На районе»</b>\n\n"
+        "Добро пожаловать в криминальный мир города!\n"
+        "Выбери свою сторону:",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
 
 # ===================== Выбор стороны =====================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("side_"))
 def choose_side(call):
     side = call.data.split("_")[1]
-    pid = str(call.from_user.id)
+    chat_id = str(call.message.chat.id)
+    user_id = str(call.from_user.id)
+    name = (call.from_user.first_name or call.from_user.username or "Безымянный")
 
     with data_lock:
         data = load_data()
-        if pid in data:
+        ensure_group(data, chat_id)
+
+        if get_player(data, chat_id, user_id):
             bot.answer_callback_query(call.id, "Ты уже выбрал сторону!")
             return
-        name = (call.from_user.first_name or call.from_user.username or "Безымянный")
-        data[pid] = {
-            "name": name, "side": side, "exp": 0,
-            "working_until": 0, "penalty_until": 0,
-            "district": None, "chat_id": call.message.chat.id,
+
+        data["groups"][chat_id]["players"][user_id] = {
+            "name": name,
+            "side": side,
+            "exp": 0,
+            "working_until": 0,
+            "penalty_until": 0,
+            "district": None,
+            "chat_id": chat_id,
             "medals": 0,
         }
         save_data(data)
@@ -387,104 +434,117 @@ def choose_side(call):
         f"<b>{name}</b>, теперь ты — {role}.\n"
         f"Твоё звание: <b>{rank}</b>\n\n"
         f"Пиши «работать», чтобы выйти на дело!",
-        call.message.chat.id, call.message.message_id, parse_mode="HTML")
-
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="HTML"
+    )
 
 # ===================== Команда «работать» =====================
 @bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in
                      ["работать", "/работать", "/work"])
 def cmd_work(message):
-    pid = str(message.from_user.id)
-    chat_id = message.chat.id
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
     triggered_district = None
 
     with data_lock:
         data = load_data()
-        player = data.get(pid)
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+
         if not player:
             bot.reply_to(message, "Сначала выбери сторону: /start")
             return
 
         now = time.time()
 
-        # Штрафной кулдаун
         if player.get("penalty_until", 0) > now:
             left = player["penalty_until"] - now
             status = "🔒 Ты задержан" if player["side"] == "bandit" else "🏥 Ты на больничном"
-            bot.reply_to(message,
+            bot.reply_to(
+                message,
                 f"{status}! Выйдешь через <b>{format_time(left)}</b>.",
-                parse_mode="HTML")
+                parse_mode="HTML"
+            )
             return
 
-        # Уже на задании
         if player["working_until"] > now:
             left = player["working_until"] - now
-            bot.reply_to(message,
+            bot.reply_to(
+                message,
                 f"⏳ Ты ещё не закончил предыдущее задание.\n"
                 f"Осталось: <b>{format_time(left)}</b>",
-                parse_mode="HTML")
+                parse_mode="HTML"
+            )
             return
 
-        # Выбор района
         district = random.choice(list(DISTRICTS.keys()))
         district_desc = DISTRICTS[district]
 
         player["working_until"] = now + WORK_DURATION
         player["district"] = district
         player["chat_id"] = chat_id
-        save_data(data)
+        set_player(data, chat_id, user_id, player)
 
-        # Проверка противников в этом районе
+        all_players = get_all_players_in_group(data, chat_id)
         enemies_exist = any(
-            opid != pid and p["side"] != player["side"]
+            opid != user_id and p["side"] != player["side"]
             and p.get("district") == district
             and p.get("working_until", 0) > now
-            for opid, p in data.items()
+            for opid, p in all_players.items()
         )
 
         if enemies_exist:
             triggered_district = district
 
-    # Сообщение об отправке
     emoji = "👮" if player["side"] == "cop" else "🔫"
     task = "задание" if player["side"] == "cop" else "мокруху"
-    bot.reply_to(message,
+
+    bot.reply_to(
+        message,
         f"{emoji} Ты отправился на {task}.\n"
         f"📍 Район: <b>«{district}»</b>\n"
         f"<i>{district_desc}</i>\n"
         f"⏱ Вернёшься через 1 час.",
-        parse_mode="HTML")
+        parse_mode="HTML"
+    )
 
-    # Если в районе есть враги — планируем групповую стычку
     if triggered_district:
         with fight_lock:
-            if triggered_district not in scheduled_fights:
-                scheduled_fights[triggered_district] = True
-                # Анонс
-                bot.send_message(chat_id,
+            fight_key = f"{chat_id}_{triggered_district}"
+            if fight_key not in scheduled_fights:
+                scheduled_fights[fight_key] = True
+                bot.send_message(
+                    message.chat.id,
                     f"🚨 В районе <b>«{triggered_district}»</b> намечается разборка!\n"
                     f"⏳ Сбор участников... ({FIGHT_DELAY} сек)",
-                    parse_mode="HTML")
-                threading.Timer(FIGHT_DELAY, resolve_group_fight,
-                                args=(triggered_district, chat_id)).start()
+                    parse_mode="HTML"
+                )
+                threading.Timer(
+                    FIGHT_DELAY,
+                    resolve_group_fight,
+                    args=(triggered_district, chat_id)
+                ).start()
     else:
-        # Одиночная миссия
-        threading.Timer(WORK_DURATION, finish_mission, args=(pid,)).start()
-
+        threading.Timer(WORK_DURATION, finish_mission, args=(user_id, chat_id)).start()
 
 # ===================== ГРУППОВАЯ СТЫЧКА =====================
 def resolve_group_fight(district, chat_id):
+    fight_key = f"{chat_id}_{district}"
+
     with fight_lock:
-        scheduled_fights.pop(district, None)
+        scheduled_fights.pop(fight_key, None)
 
     with data_lock:
         data = load_data()
+        ensure_group(data, chat_id)
         now = time.time()
+        group_players = get_all_players_in_group(data, chat_id)
 
-        # Собираем участников, находящихся в этом районе прямо сейчас
         cops = []
         bandits = []
-        for pid, p in data.items():
+
+        for pid, p in group_players.items():
             if p.get("district") != district:
                 continue
             if p.get("working_until", 0) <= now:
@@ -494,18 +554,16 @@ def resolve_group_fight(district, chat_id):
             else:
                 bandits.append(pid)
 
-        # Если в каком-то лагере никого — стычки нет
         if not cops or not bandits:
             return
 
-        # Расчёт силы фракций (RandomFactor один на фракцию)
         cop_random = random.randint(-10, 10)
         bandit_random = random.randint(-10, 10)
 
         cop_power = 0
-        cop_info = []  # (pid, name, rank, exp, individual_power)
+        cop_info = []
         for pid in cops:
-            p = data[pid]
+            p = group_players[pid]
             rank_name, rb = get_rank_info("cop", p["exp"])
             ip = p["exp"] + rb * 10
             cop_power += ip
@@ -515,7 +573,7 @@ def resolve_group_fight(district, chat_id):
         bandit_power = 0
         bandit_info = []
         for pid in bandits:
-            p = data[pid]
+            p = group_players[pid]
             rank_name, rb = get_rank_info("bandit", p["exp"])
             ip = p["exp"] + rb * 10
             bandit_power += ip
@@ -524,10 +582,9 @@ def resolve_group_fight(district, chat_id):
 
         power_diff = abs(cop_power - bandit_power)
 
-        # === Ничья ===
         if cop_power == bandit_power:
             for pid in cops + bandits:
-                p = data[pid]
+                p = group_players[pid]
                 add_exp(p, -5)
                 p["working_until"] = 0
                 p["district"] = None
@@ -545,29 +602,22 @@ def resolve_group_fight(district, chat_id):
             bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
             return
 
-        # === Определяем победителей ===
         if cop_power > bandit_power:
             winners_ids, losers_ids = cops, bandits
-            winners_info, losers_info = cop_info, bandit_info
             winner_side = "cop"
         else:
             winners_ids, losers_ids = bandits, cops
-            winners_info, losers_info = bandit_info, cop_info
             winner_side = "bandit"
 
-        # Особый исход
         special = power_diff > SPECIAL_POWER_DIFF and random.random() < SPECIAL_CHANCE
         bonus_hero_id = random.choice(winners_ids) if special else None
 
-        # Начисление опыта/штрафов
         exp_reward = 20
         exp_penalty = 15
-
-        # Запоминаем звания ДО, чтобы увидеть повышения
-        rank_ups = []  # (name, new_rank)
+        rank_ups = []
 
         for pid in winners_ids:
-            p = data[pid]
+            p = group_players[pid]
             old_rank = get_rank(p["side"], p["exp"])
             p["exp"] += exp_reward
             if pid == bonus_hero_id:
@@ -580,7 +630,7 @@ def resolve_group_fight(district, chat_id):
             p["district"] = None
 
         for pid in losers_ids:
-            p = data[pid]
+            p = group_players[pid]
             add_exp(p, -exp_penalty)
             p["penalty_until"] = now + PENALTY_SHORT
             p["working_until"] = 0
@@ -588,22 +638,19 @@ def resolve_group_fight(district, chat_id):
 
         save_data(data)
 
-    # === Формируем отчёт ===
     if winner_side == "cop":
-        w_emoji, l_emoji = "👮", "🔫"
-        w_word, l_word = "Копы", "Бандиты"
+        w_word = "Копы"
         special_title = "🚔 УСПЕШНАЯ ОПЕРАЦИЯ!"
         loser_status = "Задержаны 🔒"
     else:
-        w_emoji, l_emoji = "🔫", "👮"
-        w_word, l_word = "Бандиты", "Копы"
+        w_word = "Бандиты"
         special_title = "💀 ПЕРЕСТРЕЛКА!"
         loser_status = "Ранены 🏥"
 
     lines = [
         f"⚔️ <b>Разборка в районе «{district}»</b>",
         f"{'─' * 25}",
-        f"",
+        "",
         f"👮 <b>Копы</b> ({len(cop_info)}):"
     ]
     for _, name, rank, exp, ip in cop_info:
@@ -615,18 +662,18 @@ def resolve_group_fight(district, chat_id):
         lines.append(f"   • {name} ({rank}, {exp} опыта)")
     lines.append(f"   ⚡ Общая сила: <b>{bandit_power}</b>")
     lines.append("")
-    lines.append(f"🏆 <b>Победили: {w_word}!</b> {w_emoji}")
+    lines.append(f"🏆 <b>Победили: {w_word}!</b>")
     lines.append(f"📈 Каждый победитель: <b>+{exp_reward}</b> опыта")
     lines.append(f"📉 Каждый проигравший: <b>-{exp_penalty}</b> опыта + штраф 30 мин ({loser_status})")
 
     if special and bonus_hero_id:
-        with data_lock:
-            data = load_data()
-            hero_name = data[bonus_hero_id]["name"]
+        hero_name = group_players[bonus_hero_id]["name"]
         lines.append("")
         lines.append(special_title)
-        lines.append(f"🎖 <b>{hero_name}</b> отличился и получает дополнительно "
-                     f"<b>+10</b> опыта и медаль!")
+        lines.append(
+            f"🎖 <b>{hero_name}</b> отличился и получает дополнительно "
+            f"<b>+10</b> опыта и медаль!"
+        )
 
     if rank_ups:
         lines.append("")
@@ -636,12 +683,14 @@ def resolve_group_fight(district, chat_id):
 
     bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
 
-
 # ===================== Завершение одиночной миссии =====================
-def finish_mission(pid):
+def finish_mission(pid, chat_id):
     with data_lock:
         data = load_data()
-        player = data.get(pid)
+        ensure_group(data, chat_id)
+        group_players = get_all_players_in_group(data, chat_id)
+        player = group_players.get(pid)
+
         if not player:
             return
         if player["working_until"] == 0:
@@ -652,34 +701,37 @@ def finish_mission(pid):
         now = time.time()
         district = player["district"]
 
-        # Проверка на врагов в последний момент
-        for opid, p in data.items():
-            if opid == pid: continue
-            if (p["side"] != player["side"] and p.get("district") == district
-                    and p.get("working_until", 0) > now):
+        for opid, p in group_players.items():
+            if opid == pid:
+                continue
+            if (
+                p["side"] != player["side"]
+                and p.get("district") == district
+                and p.get("working_until", 0) > now
+            ):
                 with fight_lock:
-                    if district not in scheduled_fights:
-                        scheduled_fights[district] = True
-                        threading.Timer(2, resolve_group_fight,
-                                        args=(district, player["chat_id"])).start()
+                    fight_key = f"{chat_id}_{district}"
+                    if fight_key not in scheduled_fights:
+                        scheduled_fights[fight_key] = True
+                        threading.Timer(
+                            2,
+                            resolve_group_fight,
+                            args=(district, chat_id)
+                        ).start()
                 return
 
-        # === Бросок кубика: 65% успех / 35% провал ===
         success = random.random() < 0.65
-
         old_rank = get_rank(player["side"], player["exp"])
 
         if success:
             desc, exp_change = pick_event_by_rank(player["side"], player["exp"])
             add_exp(player, exp_change)
         else:
-            # Выбираем провальное задание
             fail_events = COP_FAIL_EVENTS if player["side"] == "cop" else BANDIT_FAIL_EVENTS
             desc, exp_change = random.choice(fail_events)
-            add_exp(player, exp_change)  # exp_change отрицательный
+            add_exp(player, exp_change)
 
         new_rank = get_rank(player["side"], player["exp"])
-        chat_id = player["chat_id"]
         player["working_until"] = 0
         player["district"] = None
         save_data(data)
@@ -696,7 +748,7 @@ def finish_mission(pid):
 
     text = (
         f"{result_header}\n"
-        f"{'─'*25}\n"
+        f"{'─' * 25}\n"
         f"{emoji} <b>{player['name']}</b> | {side_word}\n"
         f"📍 Район: <b>«{district}»</b>\n\n"
         f"📋 <b>Что произошло:</b>\n"
@@ -706,11 +758,9 @@ def finish_mission(pid):
         f"🎖 Звание: <b>{new_rank}</b>"
     )
 
-    # Повышение звания
     if success and old_rank != new_rank:
         text += f"\n\n🎉 <b>ПОВЫШЕНИЕ!</b> {old_rank} → <b>{new_rank}</b>!"
 
-    # Понижение звания
     if not success and old_rank != new_rank:
         text += f"\n\n📉 <b>ПОНИЖЕНИЕ!</b> {old_rank} → <b>{new_rank}</b>"
 
@@ -718,16 +768,17 @@ def finish_mission(pid):
 
     bot.send_message(chat_id, text, parse_mode="HTML")
 
-# na_raione.py — Часть 4
-
 # ===================== Профиль =====================
 @bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in
                      ["профиль", "/профиль", "/profile"])
 def cmd_profile(message):
-    pid = str(message.from_user.id)
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+
     with data_lock:
         data = load_data()
-        player = data.get(pid)
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
 
     if not player:
         bot.reply_to(message, "Ты ещё не в игре. Напиши /start")
@@ -740,7 +791,6 @@ def cmd_profile(message):
     medals = player.get("medals", 0)
     side_text = "👮 Полицейский" if side == "cop" else "🔫 Бандит"
 
-    # Прогресс-бар
     progress_text = ""
     if next_rank:
         table = COP_RANKS if side == "cop" else BANDIT_RANKS
@@ -756,18 +806,16 @@ def cmd_profile(message):
             filled = int(progress * 10)
             bar = "█" * filled + "░" * (10 - filled)
             progress_text = (
-                f"\n📊 Прогресс: [{bar}] {int(progress*100)}%\n"
+                f"\n📊 Прогресс: [{bar}] {int(progress * 100)}%\n"
                 f"⏭ Следующее звание: <b>{next_rank}</b> (ещё {exp_left} опыта)"
             )
     else:
         progress_text = "\n🏆 Максимальное звание достигнуто!"
 
-    # Статус
     now = time.time()
     if player.get("penalty_until", 0) > now:
         left = player["penalty_until"] - now
-        status = ("🔒 Задержан" if side == "bandit" else "🏥 На больничном") + \
-                 f" ({format_time(left)})"
+        status = ("🔒 Задержан" if side == "bandit" else "🏥 На больничном") + f" ({format_time(left)})"
     elif player["working_until"] > now:
         left = player["working_until"] - now
         status = f"🔄 На задании в «{player['district']}» ({format_time(left)})"
@@ -778,7 +826,7 @@ def cmd_profile(message):
 
     text = (
         f"📋 <b>ЛИЧНОЕ ДЕЛО</b>\n"
-        f"{'─'*25}\n"
+        f"{'─' * 25}\n"
         f"👤 Имя: <b>{player['name']}</b>\n"
         f"🏷 Статус: {side_text}\n"
         f"🎖 Звание: <b>{rank}</b>\n"
@@ -789,26 +837,32 @@ def cmd_profile(message):
     )
     bot.reply_to(message, text, parse_mode="HTML")
 
-
 # ===================== Топ =====================
 @bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in
                      ["топ", "/топ", "/top"])
 def cmd_top(message):
+    chat_id = str(message.chat.id)
+
     with data_lock:
         data = load_data()
-    if not data:
+        ensure_group(data, chat_id)
+        players = list(get_all_players_in_group(data, chat_id).values())
+
+    if not players:
         bot.reply_to(message, "Пока нет игроков.")
         return
-    players = sorted(data.values(), key=lambda p: p["exp"], reverse=True)
-    text = "🏆 <b>ТОП ИГРОКОВ «На районе»</b>\n" + "─"*25 + "\n\n"
+
+    players = sorted(players, key=lambda p: p["exp"], reverse=True)
+    text = "🏆 <b>ТОП ИГРОКОВ «На районе»</b>\n" + "─" * 25 + "\n\n"
     medals = ["🥇", "🥈", "🥉"]
+
     for i, p in enumerate(players[:15]):
-        mark = medals[i] if i < 3 else f"{i+1}."
+        mark = medals[i] if i < 3 else f"{i + 1}."
         emoji = "👮" if p["side"] == "cop" else "🔫"
         rank = get_rank(p["side"], p["exp"])
         text += f"{mark} {emoji} <b>{p['name']}</b> — {rank} ({p['exp']} опыта)\n"
-    bot.reply_to(message, text, parse_mode="HTML")
 
+    bot.reply_to(message, text, parse_mode="HTML")
 
 # ===================== Помощь =====================
 @bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in
@@ -816,7 +870,7 @@ def cmd_top(message):
 def cmd_help(message):
     text = (
         "🏙 <b>«На районе» — Помощь</b>\n"
-        f"{'─'*25}\n\n"
+        f"{'─' * 25}\n\n"
         "📌 <b>Команды:</b>\n"
         "• <b>работать</b> — выйти на задание (раз в час)\n"
         "• <b>профиль</b> — личное дело\n"
@@ -831,7 +885,6 @@ def cmd_help(message):
         "• При большом преимуществе возможен особый исход: +10 и медаль герою!\n"
     )
     bot.reply_to(message, text, parse_mode="HTML")
-
 
 # ===================== Запуск =====================
 if __name__ == "__main__":

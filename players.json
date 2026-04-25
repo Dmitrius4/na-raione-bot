@@ -1,0 +1,98 @@
+{
+  "groups": {
+    "-1003976511910": {
+      "players": {
+        "398712182": {
+          "name": "Дмитрий",
+          "side": "cop",
+          "exp": 365,
+          "working_until": 1777120539.6605232,
+          "penalty_until": 0,
+          "district": "Трущобы",
+          "chat_id": -1003976511910,
+          "medals": 2
+        },
+        "1711917446": {
+          "name": "Жора",
+          "side": "bandit",
+          "exp": 214,
+          "working_until": 1777119732.0100162,
+          "penalty_until": 0,
+          "district": "Мебельная фабрика",
+          "chat_id": -1003976511910,
+          "medals": 0
+        },
+        "403772535": {
+          "name": "Elena",
+          "side": "bandit",
+          "exp": 20,
+          "working_until": 1777118307.4030857,
+          "penalty_until": 1777114173.2994084,
+          "district": "Железнодорожный вокзал",
+          "chat_id": -1003976511910,
+          "medals": 0
+        },
+        "8094166902": {
+          "name": "Максим",
+          "side": "bandit",
+          "exp": 35,
+          "working_until": 0,
+          "penalty_until": 1777114151.710838,
+          "district": null,
+          "chat_id": -1003976511910,
+          "medals": 0
+        },
+        "804284289": {
+          "name": "Александр(╯°□°)╯ 🆓",
+          "side": "cop",
+          "exp": 140,
+          "working_until": 1777120263.2400095,
+          "penalty_until": 0,
+          "district": "Старый город",
+          "chat_id": -1003976511910,
+          "medals": 0
+        },
+        "1395100494": {
+          "name": "🥊",
+          "side": "bandit",
+          "exp": 70,
+          "working_until": 1777119741.2658527,
+          "penalty_until": 1777106998.5182095,
+          "district": "Стадион «Арена»",
+          "chat_id": -1003976511910,
+          "medals": 0
+        },
+        "7235907120": {
+          "name": "Александра",
+          "side": "bandit",
+          "exp": 0,
+          "working_until": 1777121315.7480502,
+          "penalty_until": 0,
+          "district": "Автосалон «Люкс»",
+          "chat_id": -1003976511910,
+          "medals": 0
+        },
+        "444742919": {
+          "name": "Алина",
+          "side": "cop",
+          "exp": 60,
+          "working_until": 1777121001.8364685,
+          "penalty_until": 1777084040.0238953,
+          "district": "Набережная",
+          "chat_id": -1003976511910,
+          "medals": 0
+        },
+        "1905369011": {
+          "name": "SashkaRad",
+          "side": "cop",
+          "exp": 0,
+          "working_until": 0,
+          "penalty_until": 0,
+          "district": null,
+          "chat_id": -1003976511910,
+          "medals": 0
+        }
+      }
+    }
+  }
+}
