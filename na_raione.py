@@ -6,7 +6,7 @@ import random
 import threading
 import time
 
-TOKEN = "токен"
+TOKEN = "ЗДЕСЬ ТОКЕН"
 bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "players.json"
 
