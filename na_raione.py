@@ -1,5 +1,3 @@
-# na_raione.py — Часть 1
-
 import telebot
 from telebot import types
 import json
@@ -7,21 +5,22 @@ import os
 import random
 import threading
 import time
-import math
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = "8697952880:AAEETA32XADz6waX31SpquqloxYUU_XP6rk"
+bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "players.json"
 
-WORK_DURATION = 3600       # 1 час — задание
-PENALTY_SHORT = 1800       # 30 мин — штраф за проигрыш
-PENALTY_LONG = 3600        # 1 час — штраф за «особый исход»
-SPECIAL_CHANCE = 0.25      # 25% шанс на особый исход
-SPECIAL_POWER_DIFF = 20    # разница силы для особого исхода
+WORK_DURATION_MIN = 20
+WORK_DURATION_MAX = 60
+PENALTY_SHORT = 1800
+SPECIAL_CHANCE = 0.25
+SPECIAL_POWER_DIFF = 20
 
-bot = telebot.TeleBot(TOKEN)
 data_lock = threading.Lock()
+fight_lock = threading.Lock()
+scheduled_fights = {}
 
-# ===================== РАЙОНЫ (20 шт.) =====================
+# ===================== РАЙОНЫ =====================
 DISTRICTS = {
     "Центр": "Деловое сердце города: банки, офисы, дорогие рестораны. Много полиции.",
     "Старый город": "Исторические здания, узкие улочки, мало камер.",
@@ -45,209 +44,48 @@ DISTRICTS = {
     "Заброшенная стройка": "Недостроенные многоэтажки, арматура и бетон. Опасно и безлюдно.",
 }
 
-# ===================== ЗАДАНИЯ КОПА (49 шт.) =====================
-COP_EVENTS = [
-    ("Патрулировал район и предотвратил мелкое хулиганство", 5),
-    ("Помог пожилому человеку, потерявшему документы", 5),
-    ("Оштрафовал водителя за превышение скорости", 7),
-    ("Задержал карманника в общественном транспорте", 10),
-    ("Раскрыл кражу велосипеда по горячим следам", 12),
-    ("Помог найти потерявшегося ребёнка", 15),
-    ("Задержал пьяного дебошира", 10),
-    ("Провёл профилактическую беседу с подростками", 5),
-    ("Раскрыл серию краж из автомобилей", 20),
-    ("Помог эвакуировать людей из задымлённого здания", 15),
-    ("Задержал угонщика автомобиля", 20),
-    ("Раскрыл дело о распространении наркотиков в районе", 25),
-    ("Помог раскрыть мошенничество с банковскими картами", 20),
-    ("Обезвредил агрессивную собаку на улице", 10),
-    ("Помог вернуть украденный телефон владельцу", 12),
-    ("Раскрыл дело о вандализме (разбитые остановки)", 15),
-    ("Задержал группу подростков, портящих имущество", 15),
-    ("Помог раскрыть квартирную кражу по камерам наблюдения", 20),
-    ("Остановил драку в баре", 15),
-    ("Раскрыл дело о незаконной торговле алкоголем", 20),
-    ("Помог найти свидетелей ДТП", 10),
-    ("Задержал рецидивиста, находящегося в розыске", 30),
-    ("Раскрыл дело о мошенничестве с недвижимостью", 25),
-    ("Помог раскрыть дело о домашнем насилии", 20),
-    ("Провёл успешную операцию по задержанию группы автоугонщиков", 35),
-    ("Раскрыл дело о подделке документов", 20),
-    ("Помог раскрыть серию телефонных мошенничеств", 25),
-    ("Задержал вооружённого грабителя магазина", 30),
-    ("Раскрыл дело о незаконном обороте оружия", 35),
-    ("Помог раскрыть дело о коррупции в мелкой организации", 30),
-    ("Провёл успешное задержание наркоторговца", 40),
-    ("Раскрыл дело о краже из банкомата", 35),
-    ("Помог раскрыть дело о торговле запрещёнными веществами", 40),
-    ("Задержал серийного вора, орудовавшего в районе", 45),
-    ("Раскрыл дело о мошенничестве с пенсионными накоплениями", 40),
-    ("Провёл операцию по освобождению заложников", 50),
-    ("Помог раскрыть дело о заказном убийстве", 60),
-    ("Раскрыл международную преступную схему", 70),
-    ("Помог предотвратить теракт", 80),
-    ("Задержал лидера крупной преступной группировки", 100),
-    ("Провёл успешное расследование по делу о киберпреступности", 45),
-    ("Помог раскрыть дело о торговле людьми", 60),
-    ("Раскрыл дело о крупном мошенничестве с госзакупками", 70),
-    ("Провёл операцию по задержанию банды фальшивомонетчиков", 50),
-    ("Помог раскрыть дело о похищении человека", 60),
-    ("Раскрыл дело о шпионаже", 80),
-    ("Провёл успешное расследование по делу о коррупции в полиции", 70),
-    ("Помог предотвратить покушение на высокопоставленное лицо", 90),
-    ("Раскрыл заговор против государства", 100),
-]
+# ===================== МАГАЗИН =====================
+SHOP_ITEMS = {
+    "medkit": {"name": "Аптечка", "type": "item", "price": 50, "desc": "Снимает штраф и восстанавливает силы."},
+    "mask": {"name": "Маска", "type": "item", "price": 80, "desc": "Снижает риск провала у бандита."},
+    "lockpick": {"name": "Отмычка", "type": "item", "price": 100, "desc": "Повышает шанс успешной кражи."},
+    "radio": {"name": "Рация", "type": "item", "price": 120, "desc": "Повышает шанс удачной операции копа."},
+    "armor": {"name": "Бронежилет", "type": "item", "price": 150, "desc": "Снижает штрафы при провале."},
+    "pistol": {"name": "Пистолет", "type": "weapon", "price": 200, "desc": "Базовое оружие."},
+    "baton": {"name": "Дубинка", "type": "weapon", "price": 170, "desc": "Оружие для копа."},
+    "knife": {"name": "Нож", "type": "weapon", "price": 220, "desc": "Оружие для бандита."},
+    "bike": {"name": "Мотоцикл", "type": "vehicle", "price": 300, "desc": "Даёт бонус к скорости и реакции."},
+    "sedan": {"name": "Седан", "type": "vehicle", "price": 450, "desc": "Комфортный транспорт."},
+}
 
-# ===================== ПРОВАЛЬНЫЕ ЗАДАНИЯ КОПА (30 шт.) =====================
-COP_FAIL_EVENTS = [
-    ("Упустил преступника во время погони", -5),
-    ("Получил жалобу от гражданина за грубое обращение", -5),
-    ("Напарник подставил под удар, пришлось отступить", -8),
-    ("Улики оказались недействительными, дело закрыто", -10),
-    ("Свидетель отказался давать показания, дело провалено", -8),
-    ("Превысил полномочия при задержании, выговор от начальства", -10),
-    ("Попал в засаду бандитов, еле выбрался", -12),
-    ("Ошибся адресом при обыске, скандал с жильцами", -8),
-    ("Потерял служебное удостоверение", -7),
-    ("Сломал казённое оборудование при погоне", -6),
-    ("Задержал не того человека, пришлось отпустить", -8),
-    ("Бандиты подкупили свидетелей, дело рассыпалось", -12),
-    ("Получил травму при задержании, отстранён от дежурства", -15),
-    ("Допустил утечку информации о готовящейся операции", -15),
-    ("Преступник сбежал прямо из-под стражи", -20),
-    ("Нарушил процедуру при обыске, доказательства признаны незаконными", -12),
-    ("Попался на взятке, служебное расследование", -20),
-    ("Упустил крупного наркоторговца из-за бюрократических ошибок", -18),
-    ("Засада провалилась — бандиты были предупреждены", -15),
-    ("Потерял важного информатора из-за халатности", -15),
-    ("Случайно раскрыл личность агента под прикрытием", -20),
-    ("Обвиняемый вышел на свободу из-за ошибки в протоколе", -12),
-    ("Во время рейда бандиты успели уничтожить улики", -10),
-    ("Начальство урезало финансирование операции в последний момент", -8),
-    ("Коллега оказался предателем, операция провалена", -25),
-    ("Получил ранение при перестрелке", -18),
-    ("Машина сломалась в погоне, преступник скрылся", -7),
-    ("Камеры наблюдения оказались сломаны, улик нет", -8),
-    ("Ордер на обыск отозвали в последний момент", -10),
-    ("Провалил проверку на детекторе лжи при внутреннем расследовании", -22),
-]
-
-# ===================== ЗАДАНИЯ БАНДИТА (49 шт.) =====================
-BANDIT_EVENTS = [
-    ("Угнал оставленный без присмотра велосипед", 5),
-    ("Вымогал деньги у прохожего", 7),
-    ("Украл телефон из незапертой машины", 10),
-    ("Разбил стекло в ларьке", 5),
-    ("Украл продукты из магазина", 8),
-    ("Угнал автомобиль (старый, дешёвый)", 15),
-    ("Вымогал «дань» у мелкого торговца", 12),
-    ("Украл кошелёк в толпе", 10),
-    ("Продал поддельные сигареты", 10),
-    ("Угнал мотоцикл", 15),
-    ("Взял «заказ» на кражу дорогой техники из квартиры", 20),
-    ("Ограбил небольшой магазин (без оружия)", 25),
-    ("Украл катализатор с автомобиля", 15),
-    ("Вымогал крупную сумму у предпринимателя", 30),
-    ("Ограбил банкомат (вскрытие, без взлома)", 35),
-    ("Украл партию алкоголя со склада", 25),
-    ("Угнал грузовик с товаром", 30),
-    ("Ограбил ломбард", 35),
-    ("Взял «заказ» на угон дорогого автомобиля", 40),
-    ("Организовал подпольный игорный клуб", 40),
-    ("Ограбил ювелирный магазин (без жертв)", 50),
-    ("Взял «заказ» на кражу ценной картины", 60),
-    ("Ограбил инкассаторскую машину", 70),
-    ("Организовал канал сбыта краденых запчастей", 50),
-    ("Взял «заказ» на устранение конкурента", 60),
-    ("Ограбил склад с электроникой", 60),
-    ("Взял «заказ» на кражу секретных документов", 70),
-    ("Ограбил казино", 80),
-    ("Взял «заказ» на похищение человека", 90),
-    ("Ограбил банк", 100),
-    ("Организовал сеть по продаже поддельных документов", 50),
-    ("Взял «заказ» на кражу оружия со склада", 70),
-    ("Ограбил фуру с дорогими товарами", 60),
-    ("Взял «заказ» на поджог бизнеса конкурента", 50),
-    ("Организовал подпольный цех по производству алкоголя", 60),
-    ("Взял «заказ» на кражу крупной партии наркотиков", 80),
-    ("Ограбил склад с медикаментами", 60),
-    ("Взял «заказ» на кражу данных с сервера компании", 70),
-    ("Ограбил склад с оружием", 90),
-    ("Взял «заказ» на убийство полицейского", 100),
-    ("Организовал сеть по сбыту краденых телефонов", 40),
-    ("Взял «заказ» на кражу дорогого антиквариата", 70),
-    ("Ограбил склад с бытовой техникой", 50),
-    ("Взял «заказ» на запугивание свидетеля", 40),
-    ("Организовал подпольный тотализатор", 50),
-    ("Взял «заказ» на кражу серверного оборудования", 70),
-    ("Сорвал крупную сделку конкурентов", 60),
-    ("Сжёг склад конкурирующей банды", 80),
-    ("Сверг лидера другой банды и захватил территорию", 100),
-]
-
-# ===================== ПРОВАЛЬНЫЕ ЗАДАНИЯ БАНДИТА (30 шт.) =====================
-BANDIT_FAIL_EVENTS = [
-    ("Попался на краже, еле унёс ноги", -5),
-    ("Заказчик отказался платить за работу", -8),
-    ("Подельник сдал полиции, пришлось залечь на дно", -15),
-    ("Облава, пришлось бросить всё и бежать", -12),
-    ("Товар оказался палёным, потерял деньги", -8),
-    ("Жертва оказала сопротивление, пришлось отступить", -7),
-    ("Навёл на себя лишнее внимание полиции", -10),
-    ("Конкуренты перехватили груз", -15),
-    ("Сигнализация сработала раньше времени, пришлось бежать", -10),
-    ("Камера зафиксировала лицо, пришлось срочно менять схему", -12),
-    ("Свой же человек обокрал при дележе", -10),
-    ("Покупатель оказался копом под прикрытием", -20),
-    ("Машина для отхода сломалась в самый неподходящий момент", -8),
-    ("Жертва опознала по голосу, пришлось залечь", -12),
-    ("Охранник оказался крепче, чем казалось", -10),
-    ("Полиция нашла схрон с товаром", -18),
-    ("Попал под чужую разборку, потерял всё при себе", -12),
-    ("Крыша потребовала увеличить долю под угрозой", -15),
-    ("Ограбление сорвалось — внутри оказалось больше охраны", -15),
-    ("Информатор оказался двойным агентом", -20),
-    ("При отходе попал в ДТП, засветился перед свидетелями", -10),
-    ("Конкурирующая банда поставила на счётчик", -18),
-    ("Товар при перевозке конфисковали на посту", -15),
-    ("Напарник струсил в последний момент, план рухнул", -10),
-    ("Жертва оказалась связана с серьёзными людьми", -20),
-    ("Сорвался с высоты при проникновении, получил травму", -12),
-    ("Ложная наводка — в хранилище оказалось пусто", -8),
-    ("Полиция устроила облаву именно в нужном районе", -15),
-    ("Покупатель расплатился фальшивками", -10),
-    ("Предал доверие смотрящего, репутация подмочена", -25),
-]
-
-# ===================== ЗВАНИЯ КОПА =====================
+# ===================== РАНГИ =====================
 COP_RANKS = [
-    (0,    "Кадет",        0),
-    (50,   "Патрульный",   1),
-    (150,  "Сержант",      3),
-    (300,  "Детектив",     4),
-    (600,  "Лейтенант",    5),
-    (1000, "Капитан",      6),
-    (1500, "Майор",        7),
+    (0, "Кадет", 0),
+    (50, "Патрульный", 1),
+    (150, "Сержант", 3),
+    (300, "Детектив", 4),
+    (600, "Лейтенант", 5),
+    (1000, "Капитан", 6),
+    (1500, "Майор", 7),
     (2500, "Подполковник", 8),
-    (4000, "Полковник",    9),
-    (7000, "Генерал",      10),
+    (4000, "Полковник", 9),
+    (7000, "Генерал", 10),
 ]
 
-# ===================== ЗВАНИЯ БАНДИТА =====================
 BANDIT_RANKS = [
-    (0,    "Шестёрка",              0),
-    (50,   "Гопник",               1),
-    (150,  "Боец",                 3),
-    (300,  "Бригадир",             4),
-    (600,  "Авторитет",            5),
-    (1000, "Смотрящий",            6),
-    (1500, "Положенец",            7),
-    (2500, "Вор в законе",         8),
+    (0, "Шестёрка", 0),
+    (50, "Гопник", 1),
+    (150, "Боец", 3),
+    (300, "Бригадир", 4),
+    (600, "Авторитет", 5),
+    (1000, "Смотрящий", 6),
+    (1500, "Положенец", 7),
+    (2500, "Вор в законе", 8),
     (4000, "Смотрящий за городом", 9),
-    (7000, "Крёстный отец",        10),
+    (7000, "Крёстный отец", 10),
 ]
 
-# ===================== РАБОТА С ДАННЫМИ =====================
+# ===================== БАЗА =====================
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -270,7 +108,6 @@ def ensure_group(data, chat_id):
         data["groups"] = {}
     if chat_id not in data["groups"]:
         data["groups"][chat_id] = {"players": {}}
-        save_data(data)
 
 def get_player(data, chat_id, user_id):
     chat_id = str(chat_id)
@@ -278,571 +115,1043 @@ def get_player(data, chat_id, user_id):
     ensure_group(data, chat_id)
     return data["groups"][chat_id]["players"].get(user_id)
 
-def set_player(data, chat_id, user_id, player_data):
-    chat_id = str(chat_id)
-    user_id = str(user_id)
-    ensure_group(data, chat_id)
-    data["groups"][chat_id]["players"][user_id] = player_data
-    save_data(data)
-
 def get_all_players_in_group(data, chat_id):
     chat_id = str(chat_id)
     ensure_group(data, chat_id)
     return data["groups"][chat_id]["players"]
 
+def ensure_player_defaults(player):
+    defaults = {
+        "exp": 0,
+        "money": 0,
+        "working_until": 0,
+        "penalty_until": 0,
+        "district": None,
+        "chat_id": None,
+        "medals": 0,
+        "inventory": {},
+        "weapon": None,
+        "vehicle": None,
+        "clues": 0,
+        "active_effects": [],
+        "wanted": 0,
+        "heat": 0,
+        "stealth": 0,
+        "evidence": 0,
+        "target": None,
+        "last_action": 0,
+        "bounty": 0,
+    }
+    for k, v in defaults.items():
+        if k not in player:
+            player[k] = v
+    return player
+
+def add_exp(player, amount):
+    player["exp"] = max(0, player.get("exp", 0) + amount)
+
+def add_money(player, amount):
+    player["money"] = max(0, player.get("money", 0) + amount)
+
+def remove_money(player, amount):
+    player["money"] = max(0, player.get("money", 0) - amount)
+
+def add_item(player, item_id, count=1):
+    if not isinstance(player.get("inventory"), dict):
+        player["inventory"] = {}
+    player["inventory"][item_id] = player["inventory"].get(item_id, 0) + count
+    if player["inventory"][item_id] <= 0:
+        del player["inventory"][item_id]
+
+def remove_item(player, item_id, count=1):
+    if not isinstance(player.get("inventory"), dict):
+        player["inventory"] = {}
+        return
+    if item_id not in player["inventory"]:
+        return
+    player["inventory"][item_id] -= count
+    if player["inventory"][item_id] <= 0:
+        del player["inventory"][item_id]
+
+def has_item(player, item_id, count=1):
+    return player.get("inventory", {}).get(item_id, 0) >= count
+
+def format_time(seconds):
+    seconds = int(seconds)
+    m, s = divmod(seconds, 60)
+    return f"{m} мин {s} сек" if m > 0 else f"{s} сек"
+
 def get_rank_info(side, exp):
-    """Возвращает (название звания, rank_bonus)"""
     table = COP_RANKS if side == "cop" else BANDIT_RANKS
-    rank_name = table[0][1]
-    rank_bonus = table[0][2]
+    rank_name, rank_bonus = table[0][1], table[0][2]
     for threshold, name, bonus in table:
         if exp >= threshold:
-            rank_name = name
-            rank_bonus = bonus
+            rank_name, rank_bonus = name, bonus
     return rank_name, rank_bonus
 
 def get_rank(side, exp):
-    """Возвращает только название звания"""
     return get_rank_info(side, exp)[0]
 
 def get_next_rank_info(side, exp):
-    """Возвращает (следующее звание, сколько опыта осталось) или (None, 0)"""
     table = COP_RANKS if side == "cop" else BANDIT_RANKS
     for threshold, name, bonus in table:
         if exp < threshold:
             return name, threshold - exp
     return None, 0
 
-def calc_power(exp, rank_bonus):
-    """Power = Experience + (RankBonus × 10) + RandomFactor(-10..+10)"""
-    random_factor = random.randint(-10, 10)
-    return exp + (rank_bonus * 10) + random_factor
+def make_progress_bar(current, total, length=12):
+    if total <= 0:
+        return "█" * length
+    filled = int(length * current / total)
+    filled = max(0, min(length, filled))
+    return "█" * filled + "░" * (length - filled)
 
-def pick_event_by_rank(side, exp):
-    """Выбирает задание с учётом уровня игрока (взвешенный рандом)"""
-    events = COP_EVENTS if side == "cop" else BANDIT_EVENTS
-    sorted_events = sorted(events, key=lambda e: e[1])
-    max_exp_threshold = 7000
-    level = min(exp / max_exp_threshold, 1.0)
-    max_event_exp = max(e[1] for e in sorted_events)
+def get_profile_progress(side, exp):
+    table = COP_RANKS if side == "cop" else BANDIT_RANKS
+    current_threshold = 0
+    next_name = None
+    next_threshold = None
 
-    weights = []
-    for desc, ev_exp in sorted_events:
-        event_level = ev_exp / max_event_exp
-        diff = abs(event_level - level)
-        weight = max(0.05, 1.0 - diff)
-        weights.append(weight)
+    for threshold, name, bonus in table:
+        if exp >= threshold:
+            current_threshold = threshold
+        else:
+            next_name = name
+            next_threshold = threshold
+            break
 
-    return random.choices(sorted_events, weights=weights, k=1)[0]
+    if next_name is None:
+        return None, None, None
 
-def is_on_cooldown(player):
-    """Проверяет, находится ли игрок на кулдауне (задержан/ранен/на задании)"""
+    current_in_rank = exp - current_threshold
+    total_needed = next_threshold - current_threshold
+    bar = make_progress_bar(current_in_rank, total_needed)
+    return next_name, bar, f"{current_in_rank}/{total_needed}"
+
+def get_item_display(player):
+    inv = player.get("inventory", {})
+    if not inv:
+        return "пусто"
+    parts = []
+    for item_id, count in inv.items():
+        name = SHOP_ITEMS.get(item_id, {}).get("name", item_id)
+        parts.append(f"{name} x{count}")
+    return ", ".join(parts)
+
+def active_effects_cleanup(player):
     now = time.time()
-    if player.get("working_until", 0) > now:
-        return True, player["working_until"] - now, "задании"
-    if player.get("penalty_until", 0) > now:
-        return True, player["penalty_until"] - now, "штрафе"
-    return False, 0, ""
+    effects = player.get("active_effects", [])
+    if not isinstance(effects, list):
+        player["active_effects"] = []
+        return
+    player["active_effects"] = [e for e in effects if e.get("until", 0) > now]
 
-def format_time(seconds):
-    """Форматирует секунды в 'X мин Y сек'"""
-    seconds = int(seconds)
-    m, s = divmod(seconds, 60)
-    if m > 0:
-        return f"{m} мин {s} сек"
-    return f"{s} сек"
+def has_active_effect(player, effect_type):
+    active_effects_cleanup(player)
+    for e in player.get("active_effects", []):
+        if e.get("type") == effect_type:
+            return True
+    return False
 
-def add_exp(player, amount):
-    """Безопасное изменение опыта — никогда не уходит ниже 0"""
-    player["exp"] = max(0, player["exp"] + amount)
+def add_effect(player, effect_type, duration=3600):
+    player.setdefault("active_effects", [])
+    player["active_effects"].append({"type": effect_type, "until": time.time() + duration})
 
-# ===================== ЛОГИКА ИГРЫ =====================
-FIGHT_DELAY = 10  # сек — окно ожидания других игроков перед стычкой
+def apply_item_effect(player, item_id):
+    if item_id == "medkit":
+        if player.get("penalty_until", 0) > time.time():
+            player["penalty_until"] = 0
+            return "Аптечка сняла штраф."
+        add_exp(player, 10)
+        return "Аптечка помогла восстановиться. +10 опыта."
+    if item_id == "mask":
+        add_effect(player, "mask", 3600)
+        return "Маска активирована на 1 час."
+    if item_id == "lockpick":
+        add_effect(player, "lockpick", 3600)
+        return "Отмычка активирована на 1 час."
+    if item_id == "radio":
+        add_effect(player, "radio", 3600)
+        return "Рация активирована на 1 час."
+    if item_id == "armor":
+        add_effect(player, "armor", 3600)
+        return "Бронежилет активирован на 1 час."
+    return "Этот предмет нельзя использовать."
 
-scheduled_fights = {}   # {fight_key: True}
-fight_lock = threading.Lock()
+def get_weapon_bonus(weapon_name):
+    if not weapon_name:
+        return 0
+    w = weapon_name.lower()
+    if "пистолет" in w:
+        return 10
+    if "дубинка" in w:
+        return 8
+    if "нож" in w:
+        return 12
+    return 5
+
+def get_vehicle_bonus(vehicle_name):
+    if not vehicle_name:
+        return 0
+    v = vehicle_name.lower()
+    if "мотоцикл" in v:
+        return 7
+    if "седан" in v:
+        return 5
+    return 3
+
+def get_effect_bonus(player, side):
+    bonus = 0
+    if side == "cop" and has_active_effect(player, "radio"):
+        bonus += 8
+    if side == "bandit" and has_active_effect(player, "lockpick"):
+        bonus += 8
+    if side == "bandit" and has_active_effect(player, "mask"):
+        bonus += 5
+    if has_active_effect(player, "armor"):
+        bonus += 4
+    return bonus
+
+def get_district_bonus(district, side):
+    if not district:
+        return 0
+    d = district.lower()
+    cop_places = ["центр", "вокзал", "тц", "галактика", "элит", "больнич"]
+    bandit_places = ["трущ", "заброш", "пром", "стройка", "гараж", "кладби"]
+    if side == "cop":
+        for x in cop_places:
+            if x in d:
+                return 6
+    else:
+        for x in bandit_places:
+            if x in d:
+                return 6
+    return 0
+
+def calc_player_power(player):
+    side = player["side"]
+    _, rank_bonus = get_rank_info(side, player["exp"])
+    base = player["exp"] + rank_bonus * 10
+    weapon_bonus = get_weapon_bonus(player.get("weapon"))
+    vehicle_bonus = get_vehicle_bonus(player.get("vehicle"))
+    effect_bonus = get_effect_bonus(player, side)
+    district_bonus = get_district_bonus(player.get("district"), side)
+    luck = random.randint(-5, 5)
+    return base + weapon_bonus + vehicle_bonus + effect_bonus + district_bonus + luck
+
+def add_wanted(player, amount):
+    player["wanted"] = max(0, player.get("wanted", 0) + amount)
+
+def add_heat(player, amount):
+    player["heat"] = max(0, player.get("heat", 0) + amount)
+
+def add_stealth(player, amount):
+    player["stealth"] = max(0, player.get("stealth", 0) + amount)
+
+def get_visibility_score(player):
+    score = 0
+    score += player.get("wanted", 0) * 10
+    score += player.get("heat", 0) * 5
+    score -= player.get("stealth", 0) * 4
+    if has_active_effect(player, "mask"):
+        score -= 8
+    if player.get("vehicle"):
+        score += 3
+    if player.get("weapon"):
+        score += 2
+    return max(0, score)
+
+def get_evidence_needed(wanted_level):
+    if wanted_level <= 0:
+        return 0
+    if wanted_level == 1:
+        return 10
+    if wanted_level == 2:
+        return 15
+    if wanted_level == 3:
+        return 20
+    if wanted_level == 4:
+        return 25
+    return 30
+
+def calculate_bounty(target):
+    bounty = 30
+    bounty += target.get("wanted", 0) * 20
+    bounty += target.get("stealth", 0) * 8
+    bounty += target.get("heat", 0) * 5
+    bounty += target.get("medals", 0) * 10
+    bounty += target.get("exp", 0) // 50
+    return min(bounty, 500)
+
+def decay_heat_and_wanted(player):
+    now = time.time()
+    last = player.get("last_action", 0)
+    if not last:
+        return
+    passed = now - last
+    if passed < 3600:
+        return
+    hours = int(passed // 3600)
+    if hours > 0:
+        player["heat"] = max(0, player.get("heat", 0) - hours)
+        if player.get("wanted", 0) > 0 and hours >= 3:
+            player["wanted"] = max(0, player["wanted"] - 1)
 
 # ===================== /start =====================
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=["start"])
 def cmd_start(message):
     if message.chat.type == "private":
-        bot.send_message(
-            message.chat.id,
-            "❌ Эта игра работает только в группе!\n"
-            "👉 Перейди сюда: https://t.me/+GRs5jc8dQuZkZGVi"
-        )
+        bot.send_message(message.chat.id, "Игра работает только в группе.")
         return
-
     chat_id = str(message.chat.id)
     user_id = str(message.from_user.id)
-
     with data_lock:
         data = load_data()
         ensure_group(data, chat_id)
-        player = get_player(data, chat_id, user_id)
-
-        if player:
-            bot.reply_to(message, "Ты уже в игре! Напиши «работать» или «профиль».")
+        if get_player(data, chat_id, user_id):
+            bot.reply_to(message, "Ты уже в игре.")
             return
-
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("👮 Полицейский", callback_data="side_cop"))
     kb.add(types.InlineKeyboardButton("🔫 Бандит", callback_data="side_bandit"))
+    bot.send_message(chat_id, "Выбери свою сторону:", reply_markup=kb)
 
-    bot.send_message(
-        message.chat.id,
-        "🏙 <b>«На районе»</b>\n\n"
-        "Добро пожаловать в криминальный мир города!\n"
-        "Выбери свою сторону:",
-        reply_markup=kb,
-        parse_mode="HTML"
-    )
 
-# ===================== Выбор стороны =====================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("side_"))
 def choose_side(call):
     side = call.data.split("_")[1]
     chat_id = str(call.message.chat.id)
     user_id = str(call.from_user.id)
-    name = (call.from_user.first_name or call.from_user.username or "Безымянный")
+    name = call.from_user.first_name or call.from_user.username or "Игрок"
 
     with data_lock:
         data = load_data()
         ensure_group(data, chat_id)
-
         if get_player(data, chat_id, user_id):
-            bot.answer_callback_query(call.id, "Ты уже выбрал сторону!")
+            bot.answer_callback_query(call.id, "Ты уже в игре!")
             return
-
         data["groups"][chat_id]["players"][user_id] = {
             "name": name,
             "side": side,
             "exp": 0,
+            "money": 100,
             "working_until": 0,
             "penalty_until": 0,
             "district": None,
             "chat_id": chat_id,
             "medals": 0,
+            "inventory": {},
+            "weapon": None,
+            "vehicle": None,
+            "clues": 0,
+            "active_effects": [],
+            "wanted": 0,
+            "heat": 0,
+            "stealth": 0,
+            "evidence": 0,
+            "target": None,
+            "last_action": 0,
+            "bounty": 0,
         }
         save_data(data)
 
-    role = "полицейский 👮" if side == "cop" else "бандит 🔫"
-    rank = "Кадет" if side == "cop" else "Шестёрка"
+    side_emoji = "👮" if side == "cop" else "🔫"
+    side_name = "полицейский" if side == "cop" else "бандит"
 
-    bot.edit_message_text(
-        f"🏙 <b>«На районе»</b>\n\n"
-        f"<b>{name}</b>, теперь ты — {role}.\n"
-        f"Твоё звание: <b>{rank}</b>\n\n"
-        f"Пиши «работать», чтобы выйти на дело!",
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode="HTML"
+    welcome_text = (
+        f"✅ {name}, теперь ты {side_emoji} {side_name}!\n"
+        f"──────────────────────────────\n\n"
+        f"🎯 Как играть:\n\n"
+        f"1️⃣ Напиши «работать» или «работать <район>»\n"
+        f"   чтобы начать задание и зарабатывать опыт\n\n"
+        f"2️⃣ Используй «профиль» для просмотра статистики\n\n"
+        f"3️⃣ Покупай снаряжение в «магазин»\n\n"
+        f"4️⃣ Полный список команд — «помощь»\n\n"
+        f"💰 Стартовый капитал: 100$\n"
+        f"🗺️ Доступные районы: «районы»\n\n"
+        f"Удачи в игре! 🎮"
     )
 
-# ===================== Команда «работать» =====================
-@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in
-                     ["работать", "/работать", "/work"])
+    bot.edit_message_text(
+        welcome_text,
+        call.message.chat.id,
+        call.message.message_id
+    )
+
+# ===================== РАЙОНЫ =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["районы", "/districts"])
+def cmd_districts(message):
+    text = (
+        "🗺️ СПИСОК РАЙОНОВ ГОРОДА\n"
+        "──────────────────────────────\n\n"
+    )
+    for i, (name, desc) in enumerate(DISTRICTS.items(), 1):
+        text += (
+            f"📍 {i}. {name}\n"
+            f"   ➤ {desc}\n\n"
+        )
+    bot.reply_to(message, text)
+
+# ===================== РАБОТАТЬ =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip().startswith("работать"))
 def cmd_work(message):
     chat_id = str(message.chat.id)
     user_id = str(message.from_user.id)
-    triggered_district = None
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+
+    selected_district = None
+    if len(parts) > 1:
+        selected_district_raw = parts[1].strip().lower()
+        matched = None
+        for dname in DISTRICTS.keys():
+            if dname.lower() == selected_district_raw:
+                matched = dname
+                break
+        if not matched:
+            for dname in DISTRICTS.keys():
+                if selected_district_raw in dname.lower():
+                    matched = dname
+                    break
+        if matched:
+            selected_district = matched
+        else:
+            bot.reply_to(message, f"Неизвестный район '{parts[1]}'. Используй 'районы'.")
+            return
 
     with data_lock:
         data = load_data()
         ensure_group(data, chat_id)
         player = get_player(data, chat_id, user_id)
-
         if not player:
-            bot.reply_to(message, "Сначала выбери сторону: /start")
+            bot.reply_to(message, "Ты ещё не в игре.")
             return
+        ensure_player_defaults(player)
 
         now = time.time()
-
         if player.get("penalty_until", 0) > now:
-            left = player["penalty_until"] - now
-            status = "🔒 Ты задержан" if player["side"] == "bandit" else "🏥 Ты на больничном"
-            bot.reply_to(
-                message,
-                f"{status}! Выйдешь через <b>{format_time(left)}</b>.",
-                parse_mode="HTML"
+            bot.reply_to(message, "Ты на штрафе и не можешь работать.")
+            return
+        if player.get("working_until", 0) > now:
+            bot.reply_to(message, "Ты уже занят заданием.")
+            return
+
+        side = player["side"]
+
+        if selected_district is None:
+            district = random.choice(list(DISTRICTS.keys()))
+            msg = (
+                f"Ты отправился в случайный район «{district}».\n"
+                f"Чтобы выбрать район вручную, напиши: работать <название района>\n"
+                f"Для списка районов — команда 'районы'"
             )
-            return
-
-        if player["working_until"] > now:
-            left = player["working_until"] - now
-            bot.reply_to(
-                message,
-                f"⏳ Ты ещё не закончил предыдущее задание.\n"
-                f"Осталось: <b>{format_time(left)}</b>",
-                parse_mode="HTML"
-            )
-            return
-
-        district = random.choice(list(DISTRICTS.keys()))
-        district_desc = DISTRICTS[district]
-
-        player["working_until"] = now + WORK_DURATION
-        player["district"] = district
-        player["chat_id"] = chat_id
-        set_player(data, chat_id, user_id, player)
-
-        all_players = get_all_players_in_group(data, chat_id)
-        enemies_exist = any(
-            opid != user_id and p["side"] != player["side"]
-            and p.get("district") == district
-            and p.get("working_until", 0) > now
-            for opid, p in all_players.items()
-        )
-
-        if enemies_exist:
-            triggered_district = district
-
-    emoji = "👮" if player["side"] == "cop" else "🔫"
-    task = "задание" if player["side"] == "cop" else "мокруху"
-
-    bot.reply_to(
-        message,
-        f"{emoji} Ты отправился на {task}.\n"
-        f"📍 Район: <b>«{district}»</b>\n"
-        f"<i>{district_desc}</i>\n"
-        f"⏱ Вернёшься через 1 час.",
-        parse_mode="HTML"
-    )
-
-    if triggered_district:
-        with fight_lock:
-            fight_key = f"{chat_id}_{triggered_district}"
-            if fight_key not in scheduled_fights:
-                scheduled_fights[fight_key] = True
-                bot.send_message(
-                    message.chat.id,
-                    f"🚨 В районе <b>«{triggered_district}»</b> намечается разборка!\n"
-                    f"⏳ Сбор участников... ({FIGHT_DELAY} сек)",
-                    parse_mode="HTML"
-                )
-                threading.Timer(
-                    FIGHT_DELAY,
-                    resolve_group_fight,
-                    args=(triggered_district, chat_id)
-                ).start()
-    else:
-        threading.Timer(WORK_DURATION, finish_mission, args=(user_id, chat_id)).start()
-
-# ===================== ГРУППОВАЯ СТЫЧКА =====================
-def resolve_group_fight(district, chat_id):
-    fight_key = f"{chat_id}_{district}"
-
-    with fight_lock:
-        scheduled_fights.pop(fight_key, None)
-
-    with data_lock:
-        data = load_data()
-        ensure_group(data, chat_id)
-        now = time.time()
-        group_players = get_all_players_in_group(data, chat_id)
-
-        cops = []
-        bandits = []
-
-        for pid, p in group_players.items():
-            if p.get("district") != district:
-                continue
-            if p.get("working_until", 0) <= now:
-                continue
-            if p["side"] == "cop":
-                cops.append(pid)
-            else:
-                bandits.append(pid)
-
-        if not cops or not bandits:
-            return
-
-        cop_random = random.randint(-10, 10)
-        bandit_random = random.randint(-10, 10)
-
-        cop_power = 0
-        cop_info = []
-        for pid in cops:
-            p = group_players[pid]
-            rank_name, rb = get_rank_info("cop", p["exp"])
-            ip = p["exp"] + rb * 10
-            cop_power += ip
-            cop_info.append((pid, p["name"], rank_name, p["exp"], ip))
-        cop_power += cop_random
-
-        bandit_power = 0
-        bandit_info = []
-        for pid in bandits:
-            p = group_players[pid]
-            rank_name, rb = get_rank_info("bandit", p["exp"])
-            ip = p["exp"] + rb * 10
-            bandit_power += ip
-            bandit_info.append((pid, p["name"], rank_name, p["exp"], ip))
-        bandit_power += bandit_random
-
-        power_diff = abs(cop_power - bandit_power)
-
-        if cop_power == bandit_power:
-            for pid in cops + bandits:
-                p = group_players[pid]
-                add_exp(p, -5)
-                p["working_until"] = 0
-                p["district"] = None
-            save_data(data)
-
-            lines = [
-                f"⚔️ <b>Разборка в районе «{district}»</b>",
-                f"{'─' * 25}",
-                f"👮 Копы ({len(cops)}): сила <b>{cop_power}</b>",
-                f"🔫 Бандиты ({len(bandits)}): сила <b>{bandit_power}</b>",
-                "",
-                f"🤝 <b>НИЧЬЯ!</b>",
-                f"Все участники потеряли по 5 ед. опыта."
-            ]
-            bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
-            return
-
-        if cop_power > bandit_power:
-            winners_ids, losers_ids = cops, bandits
-            winner_side = "cop"
         else:
-            winners_ids, losers_ids = bandits, cops
-            winner_side = "bandit"
+            district = selected_district
+            msg = f"Ты отправился в район «{district}»."
 
-        special = power_diff > SPECIAL_POWER_DIFF and random.random() < SPECIAL_CHANCE
-        bonus_hero_id = random.choice(winners_ids) if special else None
-
-        exp_reward = 20
-        exp_penalty = 15
-        rank_ups = []
-
-        for pid in winners_ids:
-            p = group_players[pid]
-            old_rank = get_rank(p["side"], p["exp"])
-            p["exp"] += exp_reward
-            if pid == bonus_hero_id:
-                p["exp"] += 10
-                p["medals"] = p.get("medals", 0) + 1
-            new_rank = get_rank(p["side"], p["exp"])
-            if old_rank != new_rank:
-                rank_ups.append((p["name"], new_rank))
-            p["working_until"] = 0
-            p["district"] = None
-
-        for pid in losers_ids:
-            p = group_players[pid]
-            add_exp(p, -exp_penalty)
-            p["penalty_until"] = now + PENALTY_SHORT
-            p["working_until"] = 0
-            p["district"] = None
-
+        player["district"] = district
+        player["last_action"] = now
+        duration = random.randint(WORK_DURATION_MIN, WORK_DURATION_MAX) * 60
+        player["working_until"] = now + duration
         save_data(data)
 
-    if winner_side == "cop":
-        w_word = "Копы"
-        special_title = "🚔 УСПЕШНАЯ ОПЕРАЦИЯ!"
-        loser_status = "Задержаны 🔒"
-    else:
-        w_word = "Бандиты"
-        special_title = "💀 ПЕРЕСТРЕЛКА!"
-        loser_status = "Ранены 🏥"
+    bot.reply_to(message, f"{msg}\nЗадание завершится через {format_time(duration)}.")
+    threading.Timer(duration, finish_mission, args=(user_id, chat_id)).start()
 
-    lines = [
-        f"⚔️ <b>Разборка в районе «{district}»</b>",
-        f"{'─' * 25}",
-        "",
-        f"👮 <b>Копы</b> ({len(cop_info)}):"
-    ]
-    for _, name, rank, exp, ip in cop_info:
-        lines.append(f"   • {name} ({rank}, {exp} опыта)")
-    lines.append(f"   ⚡ Общая сила: <b>{cop_power}</b>")
-    lines.append("")
-    lines.append(f"🔫 <b>Бандиты</b> ({len(bandit_info)}):")
-    for _, name, rank, exp, ip in bandit_info:
-        lines.append(f"   • {name} ({rank}, {exp} опыта)")
-    lines.append(f"   ⚡ Общая сила: <b>{bandit_power}</b>")
-    lines.append("")
-    lines.append(f"🏆 <b>Победили: {w_word}!</b>")
-    lines.append(f"📈 Каждый победитель: <b>+{exp_reward}</b> опыта")
-    lines.append(f"📉 Каждый проигравший: <b>-{exp_penalty}</b> опыта + штраф 30 мин ({loser_status})")
-
-    if special and bonus_hero_id:
-        hero_name = group_players[bonus_hero_id]["name"]
-        lines.append("")
-        lines.append(special_title)
-        lines.append(
-            f"🎖 <b>{hero_name}</b> отличился и получает дополнительно "
-            f"<b>+10</b> опыта и медаль!"
-        )
-
-    if rank_ups:
-        lines.append("")
-        lines.append("🎖 <b>Повышения:</b>")
-        for name, new_rank in rank_ups:
-            lines.append(f"   • {name} → <b>{new_rank}</b>")
-
-    bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
-
-# ===================== Завершение одиночной миссии =====================
 def finish_mission(pid, chat_id):
     with data_lock:
         data = load_data()
         ensure_group(data, chat_id)
-        group_players = get_all_players_in_group(data, chat_id)
-        player = group_players.get(pid)
-
+        player = get_player(data, chat_id, pid)
         if not player:
             return
-        if player["working_until"] == 0:
+        ensure_player_defaults(player)
+        if player.get("working_until", 0) == 0:
             return
-        if player["working_until"] > time.time() + 5:
-            return
 
-        now = time.time()
-        district = player["district"]
+        side = player["side"]
+        active_effects_cleanup(player)
 
-        for opid, p in group_players.items():
-            if opid == pid:
-                continue
-            if (
-                p["side"] != player["side"]
-                and p.get("district") == district
-                and p.get("working_until", 0) > now
-            ):
-                with fight_lock:
-                    fight_key = f"{chat_id}_{district}"
-                    if fight_key not in scheduled_fights:
-                        scheduled_fights[fight_key] = True
-                        threading.Timer(
-                            2,
-                            resolve_group_fight,
-                            args=(district, chat_id)
-                        ).start()
-                return
+        success_chance = 0.65
+        if side == "cop" and has_active_effect(player, "radio"):
+            success_chance += 0.10
+        if side == "bandit" and has_active_effect(player, "lockpick"):
+            success_chance += 0.10
+        if side == "bandit" and has_active_effect(player, "mask"):
+            success_chance += 0.07
+        if player.get("vehicle"):
+            success_chance += 0.03
+        if player.get("district"):
+            success_chance += get_district_bonus(player["district"], side) / 100.0
 
-        success = random.random() < 0.65
-        old_rank = get_rank(player["side"], player["exp"])
+        success = random.random() < success_chance
+        old_rank = get_rank(side, player["exp"])
 
         if success:
-            desc, exp_change = pick_event_by_rank(player["side"], player["exp"])
-            add_exp(player, exp_change)
+            if side == "cop":
+                reward = random.randint(10, 25)
+                player["money"] += reward
+                player["exp"] += reward
+            else:
+                reward = random.randint(20, 60)
+                player["money"] += reward
+                player["exp"] += reward
+                add_wanted(player, 1)
+                add_heat(player, 2)
         else:
-            fail_events = COP_FAIL_EVENTS if player["side"] == "cop" else BANDIT_FAIL_EVENTS
-            desc, exp_change = random.choice(fail_events)
-            add_exp(player, exp_change)
+            if side == "cop":
+                player["money"] = max(0, player["money"] - random.randint(5, 15))
+                player["penalty_until"] = time.time() + 900
+            else:
+                reward = random.randint(5, 20)
+                player["money"] += reward
+                player["exp"] += reward
+                add_wanted(player, 2)
+                add_heat(player, 3)
 
-        new_rank = get_rank(player["side"], player["exp"])
+        player["last_action"] = time.time()
+        new_rank = get_rank(side, player["exp"])
+        district = player["district"]
         player["working_until"] = 0
         player["district"] = None
         save_data(data)
 
-    emoji = "👮" if player["side"] == "cop" else "🔫"
-    side_word = "Полицейский" if player["side"] == "cop" else "Бандит"
-
-    if success:
-        result_header = "✅ <b>Задание выполнено!</b>"
-        reward_line = f"💰 Награда: <b>+{exp_change} опыта</b>"
-    else:
-        result_header = "❌ <b>Задание провалено!</b>"
-        reward_line = f"💸 Потеря: <b>{exp_change} опыта</b>"
-
-    text = (
-        f"{result_header}\n"
-        f"{'─' * 25}\n"
-        f"{emoji} <b>{player['name']}</b> | {side_word}\n"
-        f"📍 Район: <b>«{district}»</b>\n\n"
-        f"📋 <b>Что произошло:</b>\n"
-        f"{desc}.\n\n"
-        f"{reward_line}\n"
-        f"⭐ Всего опыта: <b>{player['exp']}</b>\n"
-        f"🎖 Звание: <b>{new_rank}</b>"
+    result_text = "✅ Задание выполнено!" if success else "❌ Задание провалено!"
+    rank_text = f"\nЗвание: {old_rank} → {new_rank}" if old_rank != new_rank else f"\nЗвание: {new_rank}"
+    bot.send_message(
+        chat_id,
+        f"{result_text}\n"
+        f"Район: {district}\n"
+        f"Баланс: {player['money']}$\n"
+        f"Опыт: {player['exp']}{rank_text}"
     )
 
-    if success and old_rank != new_rank:
-        text += f"\n\n🎉 <b>ПОВЫШЕНИЕ!</b> {old_rank} → <b>{new_rank}</b>!"
-
-    if not success and old_rank != new_rank:
-        text += f"\n\n📉 <b>ПОНИЖЕНИЕ!</b> {old_rank} → <b>{new_rank}</b>"
-
-    text += "\n\nПиши «работать» чтобы выйти на следующее задание!"
-
-    bot.send_message(chat_id, text, parse_mode="HTML")
-
-# ===================== Профиль =====================
-@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in
-                     ["профиль", "/профиль", "/profile"])
-def cmd_profile(message):
+# ===================== СКРЫТЬСЯ =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["скрыться", "/hide"])
+def cmd_hide(message):
     chat_id = str(message.chat.id)
     user_id = str(message.from_user.id)
-
     with data_lock:
         data = load_data()
         ensure_group(data, chat_id)
         player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+        if player["side"] != "bandit":
+            bot.reply_to(message, "Скрываться могут только бандиты.")
+            return
+        now = time.time()
+        if player.get("penalty_until", 0) > now:
+            bot.reply_to(message, "На штрафе нельзя скрываться.")
+            return
+        success = random.random() < (0.5 + player.get("stealth", 0) * 0.03)
+        player["last_action"] = now
+        if success:
+            reduced = random.randint(1, 3)
+            player["heat"] = max(0, player.get("heat", 0) - reduced)
+            player["stealth"] += 1
+            save_data(data)
+            bot.reply_to(message, f"Ты залёг на дно. Шум снизился на {reduced}. Скрытность +1.")
+        else:
+            add_wanted(player, 1)
+            add_heat(player, 1)
+            save_data(data)
+            bot.reply_to(message, "Попытка скрыться провалилась. Розыск +1, шум +1.")
 
-    if not player:
-        bot.reply_to(message, "Ты ещё не в игре. Напиши /start")
+# ===================== ИСКАТЬ =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["искать", "/search"])
+def cmd_search(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        cop = get_player(data, chat_id, user_id)
+        if not cop:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(cop)
+        if cop["side"] != "cop":
+            bot.reply_to(message, "Искать могут только копы.")
+            return
+        district = cop.get("district")
+        if not district:
+            bot.reply_to(message, "Сначала отправься в район командой 'работать <район>'.")
+            return
+
+        group_players = get_all_players_in_group(data, chat_id)
+        found = []
+        total_clues = 0
+
+        for pid, p in group_players.items():
+            if p["side"] != "bandit":
+                continue
+            if p.get("district") != district:
+                continue
+            vis = get_visibility_score(p)
+            chance = 0.35 + min(vis / 100.0, 0.4)
+            if random.random() < chance:
+                clues = random.randint(1, 4)
+                total_clues += clues
+                found.append((p["name"], clues))
+                p["wanted"] = min(5, p.get("wanted", 0) + 1)
+
+        cop["clues"] = cop.get("clues", 0) + total_clues
+        cop["last_action"] = time.time()
+        save_data(data)
+
+    if not found:
+        bot.reply_to(message, f"В районе «{district}» следов не найдено.")
         return
 
-    side = player["side"]
-    exp = player["exp"]
-    rank, rank_bonus = get_rank_info(side, exp)
-    next_rank, exp_left = get_next_rank_info(side, exp)
-    medals = player.get("medals", 0)
-    side_text = "👮 Полицейский" if side == "cop" else "🔫 Бандит"
+    text = f"Ты нашёл следы в районе «{district}»:\n"
+    for name, clues in found:
+        text += f"• {name}: +{clues} улик\n"
+    text += f"\nВсего улик собрано: +{total_clues}"
+    bot.reply_to(message, text)
 
-    progress_text = ""
-    if next_rank:
-        table = COP_RANKS if side == "cop" else BANDIT_RANKS
-        cur_t = next_t = 0
-        for i, row in enumerate(table):
-            if row[1] == rank:
-                cur_t = row[0]
-                if i + 1 < len(table):
-                    next_t = table[i + 1][0]
+# ===================== ОХОТА =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip().startswith("охота "))
+def cmd_hunt(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        bot.reply_to(message, "Укажи имя цели. Пример: охота Вася")
+        return
+
+    target_name = parts[1].strip().lower()
+
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        cop = get_player(data, chat_id, user_id)
+        if not cop:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(cop)
+        if cop["side"] != "cop":
+            bot.reply_to(message, "Охоту может объявлять только коп.")
+            return
+
+        group_players = get_all_players_in_group(data, chat_id)
+        target_id = None
+        target_player = None
+
+        for pid, p in group_players.items():
+            if p["name"].lower() == target_name and p["side"] == "bandit":
+                target_id = pid
+                target_player = p
                 break
-        if next_t > cur_t:
-            progress = (exp - cur_t) / (next_t - cur_t)
-            filled = int(progress * 10)
-            bar = "█" * filled + "░" * (10 - filled)
-            progress_text = (
-                f"\n📊 Прогресс: [{bar}] {int(progress * 100)}%\n"
-                f"⏭ Следующее звание: <b>{next_rank}</b> (ещё {exp_left} опыта)"
+
+        if not target_player:
+            bot.reply_to(message, "Такой бандит в группе не найден.")
+            return
+
+        needed = get_evidence_needed(target_player.get("wanted", 0))
+        if cop.get("clues", 0) < needed:
+            bot.reply_to(message, f"Недостаточно улик для охоты. Нужно {needed}, у тебя {cop.get('clues', 0)}.")
+            return
+
+        cop["target"] = target_id
+        cop["clues"] -= needed
+        cop["last_action"] = time.time()
+        target_player["bounty"] = calculate_bounty(target_player)
+        save_data(data)
+
+    bot.reply_to(
+        message,
+        f"Охота объявлена на {target_player['name']}.\n"
+        f"Награда за поимку: {target_player['bounty']}$"
+    )
+
+# ===================== ЗАДЕРЖАТЬ =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["задержать", "/arrest"])
+def cmd_arrest(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        cop = get_player(data, chat_id, user_id)
+        if not cop:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(cop)
+        if cop["side"] != "cop":
+            bot.reply_to(message, "Задерживать могут только копы.")
+            return
+
+        target_id = cop.get("target")
+        if not target_id:
+            bot.reply_to(message, "У тебя нет цели. Сначала объяви охоту.")
+            return
+
+        group_players = get_all_players_in_group(data, chat_id)
+        target = group_players.get(target_id)
+        if not target or target.get("side") != "bandit":
+            cop["target"] = None
+            save_data(data)
+            bot.reply_to(message, "Цель недоступна.")
+            return
+
+        arrest_power = calc_player_power(cop)
+        escape_power = calc_player_power(target)
+
+        wanted = target.get("wanted", 0)
+        arrest_power += max(0, (cop.get("clues", 0)) * 2)
+        escape_power += wanted * 8
+
+        if target.get("vehicle"):
+            escape_power += 5
+        if has_active_effect(target, "mask"):
+            escape_power += 6
+
+        bounty = target.get("bounty", calculate_bounty(target))
+
+        if arrest_power >= escape_power:
+            target["money"] = int(target.get("money", 0) * 0.7)
+            target["wanted"] = 0
+            target["heat"] = 0
+            target["penalty_until"] = time.time() + PENALTY_SHORT
+            cop["exp"] += 20
+            cop["money"] += bounty
+            cop["medals"] = cop.get("medals", 0) + 1
+            cop["target"] = None
+            save_data(data)
+            bot.reply_to(
+                message,
+                f"✅ Цель {target['name']} задержана!\n"
+                f"Награда: +{bounty}$\n"
+                f"+20 опыта и медаль."
             )
-    else:
-        progress_text = "\n🏆 Максимальное звание достигнуто!"
+        else:
+            cop["target"] = None
+            cop["penalty_until"] = time.time() + 900
+            save_data(data)
+            bot.reply_to(message, f"❌ Цель {target['name']} ушла. Попробуй снова позже.")
+
+# ===================== ПРОФИЛЬ =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["профиль", "/profile"])
+def cmd_profile(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+        active_effects_cleanup(player)
+        save_data(data)
+
+    side_emoji = "👮" if player["side"] == "cop" else "🔫"
+    side_text = "Полицейский" if player["side"] == "cop" else "Бандит"
+    rank = get_rank(player["side"], player["exp"])
+    next_rank, progress_bar, progress_nums = get_profile_progress(player["side"], player["exp"])
+
+    weapon = player.get("weapon") or "нет"
+    vehicle = player.get("vehicle") or "нет"
+    inventory = get_item_display(player)
+
+    effects_list = player.get("active_effects", [])
+    effects = "нет" if not effects_list else ", ".join(
+        f"{e['type']} ({format_time(e['until'] - time.time())})" for e in effects_list
+    )
 
     now = time.time()
-    if player.get("penalty_until", 0) > now:
-        left = player["penalty_until"] - now
-        status = ("🔒 Задержан" if side == "bandit" else "🏥 На больничном") + f" ({format_time(left)})"
-    elif player["working_until"] > now:
-        left = player["working_until"] - now
-        status = f"🔄 На задании в «{player['district']}» ({format_time(left)})"
+    if player.get("working_until", 0) > now:
+        remaining = int(player["working_until"] - now)
+        district = player.get("district", "неизвестно")
+        status = f"🔄 На задании в «{district}» ({format_time(remaining)})"
+    elif player.get("penalty_until", 0) > now:
+        remaining = int(player["penalty_until"] - now)
+        status = f"⛔ На штрафе ({format_time(remaining)})"
     else:
-        status = "💤 Свободен"
+        status = "✅ Свободен"
 
-    medals_text = f"\n🎖 Медалей: <b>{medals}</b>" if medals else ""
+    if next_rank is None:
+        progress_text = "📊 Прогресс: Максимальное звание"
+        next_rank_text = "макс"
+    else:
+        progress_text = f"📊 Прогресс: {progress_bar} {progress_nums}"
+        next_rank_text = next_rank
 
     text = (
-        f"📋 <b>ЛИЧНОЕ ДЕЛО</b>\n"
-        f"{'─' * 25}\n"
-        f"👤 Имя: <b>{player['name']}</b>\n"
-        f"🏷 Статус: {side_text}\n"
-        f"🎖 Звание: <b>{rank}</b>\n"
-        f"⭐ Опыт: <b>{exp}</b>"
-        f"{medals_text}\n"
-        f"📍 Состояние: {status}"
-        f"{progress_text}"
+        "📋 ЛИЧНОЕ ДЕЛО\n"
+        "─────────────────────────\n"
+        f"👤 Имя: {player['name']}\n"
+        f"🏷 Статус: {side_emoji} {side_text}\n"
+        f"🎖 Звание: {rank}\n"
+        f"⭐ Опыт: {player['exp']}\n"
+        f"💰 Деньги: {player['money']}$\n"
+        f"📍 Состояние: {status}\n"
+        f"{progress_text}\n"
+        f"⏭ Следующее звание: {next_rank_text}\n\n"
+        f"🔫 Оружие: {weapon}\n"
+        f"🚗 Транспорт: {vehicle}\n"
+        f"🎒 Инвентарь: {inventory}\n"
+        f"✨ Эффекты: {effects}\n"
+        f"🚨 Розыск: {player.get('wanted', 0)}\n"
+        f"🥷 Скрытность: {player.get('stealth', 0)}\n"
+        f"🔥 Шум: {player.get('heat', 0)}"
     )
-    bot.reply_to(message, text, parse_mode="HTML")
+    bot.reply_to(message, text)
 
-# ===================== Топ =====================
-@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in
-                     ["топ", "/топ", "/top"])
+# ===================== БАЛАНС =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["баланс", "/balance", "/money"])
+def cmd_balance(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+
+    text = (
+        "💰 ФИНАНСЫ\n"
+        "─────────────────────────\n"
+        f"💵 Баланс: {player['money']}$\n"
+        f"🎒 Инвентарь: {get_item_display(player)}"
+    )
+    bot.reply_to(message, text)
+
+# ===================== МАГАЗИН =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["магазин", "/shop"])
+def cmd_shop(message):
+    text = (
+        "🛒 МАГАЗИН\n"
+        "─────────────────────────\n\n"
+        "💊 Аптечка — 50$\n"
+        "   Код: medkit\n"
+        "   Снимает штраф и восстанавливает силы.\n\n"
+        "🎭 Маска — 80$\n"
+        "   Код: mask\n"
+        "   Снижает риск провала у бандита.\n\n"
+        "🔓 Отмычка — 100$\n"
+        "   Код: lockpick\n"
+        "   Повышает шанс успешной кражи.\n\n"
+        "📻 Рация — 120$\n"
+        "   Код: radio\n"
+        "   Повышает шанс удачной операции копа.\n\n"
+        "🛡 Бронежилет — 150$\n"
+        "   Код: armor\n"
+        "   Снижает штрафы при провале.\n\n"
+        "🔫 Пистолет — 200$\n"
+        "   Код: pistol\n"
+        "   Базовое оружие.\n\n"
+        "🪵 Дубинка — 170$\n"
+        "   Код: baton\n"
+        "   Оружие для копа.\n\n"
+        "🔪 Нож — 220$\n"
+        "   Код: knife\n"
+        "   Оружие для бандита.\n\n"
+        "🏍 Мотоцикл — 300$\n"
+        "   Код: bike\n"
+        "   Даёт бонус к скорости и реакции.\n\n"
+        "🚗 Седан — 450$\n"
+        "   Код: sedan\n"
+        "   Комфортный транспорт.\n\n"
+        "─────────────────────────\n"
+        "Купить: купить <код>"
+    )
+    bot.reply_to(message, text)
+
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip().startswith("купить "))
+def cmd_buy(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    parts = message.text.lower().strip().split()
+    if len(parts) < 2:
+        bot.reply_to(message, "Укажи код товара.")
+        return
+    item_id = parts[1]
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+        if item_id not in SHOP_ITEMS:
+            bot.reply_to(message, "Нет такого товара.")
+            return
+        item = SHOP_ITEMS[item_id]
+        if player["money"] < item["price"]:
+            bot.reply_to(message, "Не хватает денег.")
+            return
+        remove_money(player, item["price"])
+        if item["type"] == "item":
+            add_item(player, item_id, 1)
+            result = f"Куплен предмет: {item['name']}"
+        elif item["type"] == "weapon":
+            player["weapon"] = item["name"]
+            result = f"Куплено оружие: {item['name']}"
+        else:
+            player["vehicle"] = item["name"]
+            result = f"Куплен транспорт: {item['name']}"
+        save_data(data)
+    bot.reply_to(message, f"✅ {result}\nОсталось: {player['money']}$")
+
+# ===================== ИНВЕНТАРЬ / ЭФФЕКТЫ / СНАРЯЖЕНИЕ =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["инвентарь", "/inventory"])
+def cmd_inventory(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+
+    text = (
+        "🎒 ИНВЕНТАРЬ\n"
+        "─────────────────────────\n"
+        f"{get_item_display(player)}"
+    )
+    bot.reply_to(message, text)
+
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip().startswith("использовать "))
+def cmd_use_item(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    parts = message.text.lower().strip().split()
+    if len(parts) < 2:
+        bot.reply_to(message, "Укажи предмет.")
+        return
+    item_id = parts[1]
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+        if not has_item(player, item_id):
+            bot.reply_to(message, "У тебя нет такого предмета.")
+            return
+        result = apply_item_effect(player, item_id)
+        remove_item(player, item_id, 1)
+        save_data(data)
+    bot.reply_to(message, f"✅ {result}")
+
+
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["эффекты", "/effects"])
+def cmd_effects(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+        active_effects_cleanup(player)
+        save_data(data)
+
+    effects = player.get("active_effects", [])
+    if not effects:
+        text = (
+            "✨ АКТИВНЫЕ ЭФФЕКТЫ\n"
+            "─────────────────────────\n"
+            "Активных эффектов нет."
+        )
+    else:
+        lines = [
+            "✨ АКТИВНЫЕ ЭФФЕКТЫ\n"
+            "─────────────────────────"
+        ]
+        for e in effects:
+            lines.append(f"• {e['type']} — осталось {format_time(e['until'] - time.time())}")
+        text = "\n".join(lines)
+
+    bot.reply_to(message, text)
+
+
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["снаряжение", "/gear"])
+def cmd_gear(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+
+    weapon = player.get("weapon") or "нет"
+    vehicle = player.get("vehicle") or "нет"
+
+    text = (
+        "⚔️ СНАРЯЖЕНИЕ\n"
+        "─────────────────────────\n"
+        f"🔫 Оружие: {weapon}\n"
+        f"🚗 Транспорт: {vehicle}"
+    )
+    bot.reply_to(message, text)
+
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["снять оружие", "/unequip_weapon"])
+def cmd_unequip_weapon(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+        if not player.get("weapon"):
+            bot.reply_to(message, "У тебя нет оружия.")
+            return
+        old = player["weapon"]
+        player["weapon"] = None
+        save_data(data)
+    bot.reply_to(message, f"Оружие снято: {old}")
+
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["снять транспорт", "/unequip_vehicle"])
+def cmd_unequip_vehicle(message):
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+    with data_lock:
+        data = load_data()
+        ensure_group(data, chat_id)
+        player = get_player(data, chat_id, user_id)
+        if not player:
+            bot.reply_to(message, "Ты ещё не в игре.")
+            return
+        ensure_player_defaults(player)
+        if not player.get("vehicle"):
+            bot.reply_to(message, "У тебя нет транспорта.")
+            return
+        old = player["vehicle"]
+        player["vehicle"] = None
+        save_data(data)
+    bot.reply_to(message, f"Транспорт снят: {old}")
+
+# ===================== ТОП / ПОМОЩЬ =====================
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["топ", "/top"])
 def cmd_top(message):
     chat_id = str(message.chat.id)
-
     with data_lock:
         data = load_data()
         ensure_group(data, chat_id)
@@ -853,41 +1162,52 @@ def cmd_top(message):
         return
 
     players = sorted(players, key=lambda p: p["exp"], reverse=True)
-    text = "🏆 <b>ТОП ИГРОКОВ «На районе»</b>\n" + "─" * 25 + "\n\n"
-    medals = ["🥇", "🥈", "🥉"]
 
+    text = (
+        "🏆 ТОП ИГРОКОВ\n"
+        "─────────────────────────\n\n"
+    )
+
+    medals = ["🥇", "🥈", "🥉"]
     for i, p in enumerate(players[:15]):
         mark = medals[i] if i < 3 else f"{i + 1}."
         emoji = "👮" if p["side"] == "cop" else "🔫"
         rank = get_rank(p["side"], p["exp"])
-        text += f"{mark} {emoji} <b>{p['name']}</b> — {rank} ({p['exp']} опыта)\n"
+        text += f"{mark} {emoji} {p['name']}\n   {rank} • {p['exp']} опыта\n\n"
 
-    bot.reply_to(message, text, parse_mode="HTML")
+    bot.reply_to(message, text)
 
-# ===================== Помощь =====================
-@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in
-                     ["помощь", "/помощь", "/help"])
+@bot.message_handler(func=lambda m: m.text and m.text.lower().strip() in ["помощь", "/help"])
 def cmd_help(message):
     text = (
-        "🏙 <b>«На районе» — Помощь</b>\n"
-        f"{'─' * 25}\n\n"
-        "📌 <b>Команды:</b>\n"
-        "• <b>работать</b> — выйти на задание (раз в час)\n"
-        "• <b>профиль</b> — личное дело\n"
-        "• <b>топ</b> — рейтинг игроков\n"
-        "• <b>помощь</b> — это сообщение\n\n"
-        "📌 <b>Правила:</b>\n"
-        "• Выбери сторону: 👮 коп или 🔫 бандит\n"
-        "• Пиши «работать» — бот отправит в случайный район на 1 час\n"
-        "• Если в одном районе встретятся копы и бандиты — произойдёт разборка!\n"
-        "• Сила фракции = сумма опыта + бонусы за звание + удача\n"
-        "• Победители получают +20 опыта, проигравшие -15 и штраф 30 мин\n"
-        "• При большом преимуществе возможен особый исход: +10 и медаль герою!\n"
+        "📌 КОМАНДЫ\n"
+        "─────────────────────────\n\n"
+        "🎯 Основные:\n"
+        "• работать [<район>] — начать задание\n"
+        "• районы — список районов\n"
+        "• профиль — твоё личное дело\n"
+        "• баланс — финансы и инвентарь\n"
+        "• топ — рейтинг игроков\n\n"
+        "🛒 Магазин:\n"
+        "• магазин — список товаров\n"
+        "• купить <код> — купить предмет\n\n"
+        "🎒 Инвентарь:\n"
+        "• инвентарь — показать предметы\n"
+        "• использовать <код> — использовать\n"
+        "• эффекты — активные эффекты\n"
+        "• снаряжение — оружие и транспорт\n"
+        "• снять оружие — снять оружие\n"
+        "• снять транспорт — снять транспорт\n\n"
+        "🔫 Для бандитов:\n"
+        "• скрыться — снизить розыск\n\n"
+        "👮 Для копов:\n"
+        "• искать — собрать улики\n"
+        "• охота <имя> — объявить охоту\n"
+        "• задержать — задержать цель"
     )
-    bot.reply_to(message, text, parse_mode="HTML")
+    bot.reply_to(message, text)
 
-# ===================== Запуск =====================
+# ===================== ЗАПУСК =====================
 if __name__ == "__main__":
-    print("🏙 Бот «На районе» запущен!")
+    print("Бот запущен")
     bot.infinity_polling()
-
