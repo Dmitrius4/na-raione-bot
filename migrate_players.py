@@ -3,7 +3,7 @@ import os
 
 old_file = "players.json"
 new_file = "players.json"
-chat_id = "-5047355394"  # замени на свой chat_id
+chat_id = ""  # замени на свой chat_id
 
 def migrate_players():
     if not os.path.exists(old_file):

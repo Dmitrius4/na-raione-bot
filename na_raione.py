@@ -6,7 +6,7 @@ import os
 import time
 import string
 
-TOKEN = " тут токен"
+TOKEN =""
 bot = telebot.TeleBot(TOKEN)
 
 DATA_FILE = "players.json"
