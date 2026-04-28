@@ -1,4 +1,18 @@
 {
   "groups": {
+    "-5249919329": {
+      "players": {
+        "398712182": {
+          "money": 1000,
+          "gangsters": {},
+          "districts_controlled": [],
+          "kills": 0,
+          "first_name": "Дмитрий",
+          "last_name": "",
+          "username": "Dmitrius8507"
+        }
+      },
+      "districts": {}
+    }
   }
 }
