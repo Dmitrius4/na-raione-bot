@@ -1,31 +1,4 @@
 {
   "groups": {
-    "-5047355394": {
-      "players": {
-        "398712182": {
-          "name": "Дмитрий",
-          "side": "cop",
-          "exp": 0,
-          "money": 100,
-          "working_until": 0,
-          "penalty_until": 0,
-          "district": null,
-          "chat_id": "-5047355394",
-          "medals": 0,
-          "inventory": {},
-          "weapon": null,
-          "vehicle": null,
-          "clues": 0,
-          "active_effects": [],
-          "wanted": 0,
-          "heat": 0,
-          "stealth": 0,
-          "evidence": 0,
-          "target": null,
-          "last_action": 0,
-          "bounty": 0
-        }
-      }
-    }
   }
 }

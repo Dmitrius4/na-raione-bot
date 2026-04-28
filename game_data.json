@@ -1,0 +1,38 @@
+{
+  "groups": {
+    "-5249919329": {
+      "players": {
+        "398712182": {
+          "money": 0,
+          "gangsters": {
+            "g1": {
+              "full_name": "Марк Ковальчук",
+              "gender": "мужской",
+              "age": 56,
+              "height": 176,
+              "body_type": "худой",
+              "exp": 0,
+              "alive": true,
+              "location": null,
+              "equipment": {},
+              "on_mission_until": 0
+            },
+            "g2": {
+              "full_name": "Йоко Джонсон",
+              "gender": "женский",
+              "age": 50,
+              "height": 174,
+              "body_type": "полное",
+              "exp": 0,
+              "alive": true,
+              "location": null,
+              "equipment": {},
+              "on_mission_until": 0
+            }
+          },
+          "districts_controlled": []
+        }
+      }
+    }
+  }
+}
